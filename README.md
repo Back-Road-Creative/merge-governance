@@ -11,8 +11,10 @@ On plans where protection *is* available, it still cannot see the two failures
 these tools were written for: a suite that has not finished, and a base branch
 that moved after CI ran.
 
-Nothing here ever forces a merge, and nothing here merges on its own. Every tool
-either refuses, or prints the command a human runs.
+Nothing here merges on its own. The gate merges only the PR a human names on the
+command line; every other tool either refuses, or prints the command a human runs.
+The one way past a failing check is `--force`, which is explicit, per-invocation,
+and writes a log line before it acts — an override you can audit, not a bypass.
 
 ## What is in the box
 

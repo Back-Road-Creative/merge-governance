@@ -1,0 +1,17 @@
+# Checks that this repo publishes its own work and nothing else — no other
+# project's name, no client's name, no path from an authoring machine.
+#
+# The scanner and its pattern set live once in Back-Road-Creative/.github. This
+# file is the whole of the per-repo configuration, deliberately: the repo's own
+# name is derived from ${{ github.repository }}, so there is nothing here to keep
+# in sync and nothing to go stale.
+name: leak-scan
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  leak-scan:
+    uses: Back-Road-Creative/.github/.github/workflows/leak-scan.yml@main

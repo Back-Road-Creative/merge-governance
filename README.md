@@ -28,7 +28,7 @@ and writes a log line before it acts — an override you can audit, not a bypass
 | `bin/merge-org.sh` | optional convenience: merge by PR number inside one fixed org |
 | `bin/install-merge-approved.sh` | installs the gate, refusing a source that is stale or truncated |
 | `policy/contract.v1.json` | the machine-readable policy contract `merge-approved.sh` enforces |
-| `tests/test-merge-batch.sh` | offline harness — 110 assertions over the batch tool and the gate's `--wait` mode, no network and no real `gh` |
+| `tests/test-merge-batch.sh` | offline harness — 139 assertions over the batch tool, the gate, and the policy contract, no network and no real `gh` |
 
 ## The five gates
 
@@ -233,7 +233,7 @@ Offline and hermetic: no network, no real `gh` or `git`, no `sudo`. Everything
 runs through the injection seams to fakes in a temp dir. Waiting is made fast
 rather than stubbed out — the poll interval drops to 0.2s and the budget to a
 couple of seconds, so the real loop runs, including a scripted force-push
-mid-wait. 110 assertions across 29 cases.
+mid-wait. 139 assertions across 35 cases.
 
 ## Licence
 

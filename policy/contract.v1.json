@@ -1,0 +1,35 @@
+{
+  "contract": "merge-governance-policy",
+  "version": 1,
+  "enforced_by": "bin/merge-approved.sh",
+  "scope": "one pull request, merged only when a human names it on the command line",
+  "base_branch": {
+    "source": "the pull request's own baseRefName",
+    "default": null,
+    "unknown_base": "refuse, exit 6; never guessed, not overridable with --force"
+  },
+  "gates": [
+    { "id": "base-known",        "refuses_with": 6, "forceable": false },
+    { "id": "identity",          "refuses_with": 6, "forceable": true },
+    { "id": "ci-red",            "refuses_with": 2, "forceable": true },
+    { "id": "ci-pending",        "refuses_with": 3, "forceable": true, "deferred_by_wait": true },
+    { "id": "no-checks",         "refuses_with": 4, "forceable": true },
+    { "id": "stale-base-overlap", "refuses_with": 5, "forceable": true }
+  ],
+  "exit_codes": {
+    "0": "merged, or already merged",
+    "1": "usage error or abort",
+    "2": "CI red",
+    "3": "CI pending, or the --wait deadline expired",
+    "4": "no CI runs or checks",
+    "5": "stale base with file overlap, or overlap undeterminable",
+    "6": "gates unevaluable: identity or compare API failure, or the PR's base branch is unknown"
+  },
+  "does_not_provide": [
+    "branch protection or required status checks (a host feature, not this tool)",
+    "an allowlist of permitted base branches",
+    "staging-branch proofs",
+    "release promotion",
+    "any private workspace merge policy or review authority"
+  ]
+}

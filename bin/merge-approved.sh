@@ -31,8 +31,10 @@
 # Exit codes: 1 usage/abort, 2 CI red, 3 CI pending (also: --wait deadline
 #             expired with CI still undecided), 4 no CI runs/checks,
 #             5 stale base with file overlap (or overlap undeterminable),
-#             6 gates unevaluable (identity/compare API failure — fail CLOSED,
-#               never fail open).
+#             6 gates unevaluable (identity/compare API failure, or the PR's base
+#               branch is unknown — fail CLOSED, never fail open; an unknown
+#               base is never replaced by a guessed default and is not
+#               overridable with --force).
 #
 # Configuration. The binary/timing seams double as the offline test harness's
 # injection points and default to the real thing in production:
@@ -52,6 +54,12 @@
 #                          `sudo` scrubs the environment, so it cannot weaken the
 #                          privileged path. It grants nothing: every gate still
 #                          runs and gh falls back to the invoking user's own auth.
+
+# The policy contract this file enforces. Documented in README.md ("Policy
+# contract") and stated machine-readably in policy/contract.v1.json; the test
+# harness fails if the three disagree. Bump it, and add a new contract file,
+# when a gate or exit code changes meaning.
+MERGE_POLICY_VERSION=1
 
 GH_BIN="${GH_BIN:-/usr/bin/gh}"
 GH_MERGE_POLL_SECS="${GH_MERGE_POLL_SECS:-75}"
@@ -203,8 +211,33 @@ refuse_or_force() { # <exit-code> <log-tag> <refusal-lines...>
     echo ""
 }
 
-# Get base branch before merge (needed for post-merge resync)
-base_branch=$(gh_q pr view "$pr" "${repo_flag[@]}" --json baseRefName --jq '.baseRefName' 2>/dev/null || echo "master")
+# Get base branch before merge: the stale-base gate compares against it and the
+# post-merge resync resets to it. It is read from the PR and NEVER guessed. A
+# guessed base ("master") on a repo whose base is something else makes the
+# stale-base gate compare the wrong branch and the resync reset the wrong one,
+# so an unknown base is a refusal, not a default. Three outcomes are kept apart
+# so the diagnostic says which one happened:
+#   lookup failed (gh exited non-zero)  -> API failure
+#   lookup succeeded, empty or null     -> PR reports no base
+#   lookup succeeded, a name            -> proceed (master, main, staging, ...)
+# Not overridable with --force: --force skips a gate, but it cannot supply the
+# base branch the gates and the resync are defined against.
+base_rc=0
+base_branch=$(gh_q pr view "$pr" "${repo_flag[@]}" --json baseRefName --jq '.baseRefName' 2>/dev/null) || base_rc=$?
+if [[ "$base_rc" -ne 0 ]]; then
+    echo "  ❌ Could not read the base branch of PR #$pr (gh exited $base_rc — API failure?)." >&2
+    echo "     Base branch unknown; refusing to guess one. Nothing was merged." >&2
+    echo "     Retry when the API answers. --force does not apply here." >&2
+    echo "" >&2
+    exit 6
+fi
+if [[ -z "$base_branch" || "$base_branch" == "null" ]]; then
+    echo "  ❌ PR #$pr reports no base branch (empty or null baseRefName)." >&2
+    echo "     Base branch unknown; refusing to guess one. Nothing was merged." >&2
+    echo "     Check the PR on GitHub (repo, number, --repo). --force does not apply here." >&2
+    echo "" >&2
+    exit 6
+fi
 
 # Show what is about to be merged
 echo ""

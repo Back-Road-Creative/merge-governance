@@ -91,10 +91,22 @@ for ((i = 0; i < ${#args[@]}; i++)); do
   [[ "${args[$i]}" == "--commit" ]] && commit="${args[$((i + 1))]}"
 done
 
+fake_base="$(cat "$FAKE_DIR/base.value" 2>/dev/null || echo master)"
+[[ -n "$fake_base" ]] || fake_base=master
+
 case "${args[0]:-}:${args[1]:-}" in
   pr:view)
     case "$json" in
-      baseRefName) echo master ;;
+      baseRefName)
+        # base.fail: the lookup itself errors (API failure). base.value: the
+        # base the PR reports, possibly empty or "null". Neither: master.
+        if [[ -e "$FAKE_DIR/base.fail" ]]; then
+          echo "gh: HTTP 502" >&2; exit 1
+        elif [[ -e "$FAKE_DIR/base.value" ]]; then
+          cat "$FAKE_DIR/base.value"
+        else
+          echo master
+        fi ;;
       url)         echo "https://github.com/Fake/Repo/pull/${args[2]}" ;;
       headRefOid)  serve head ;;
       statusCheckRollup)
@@ -126,8 +138,8 @@ case "${args[0]:-}:${args[1]:-}" in
     fi ;;
   api:*)
     case "${args[1]}" in
-      */compare/master...*) serve compare ;;
-      */compare/*...master) serve basecmp ;;
+      */compare/"$fake_base"...*) serve compare ;;
+      */compare/*..."$fake_base") serve basecmp ;;
       */pulls/*/files)      serve prfiles ;;
       repos/*)
         # delete_branch_on_merge probe: true unless the fixture says otherwise.
@@ -569,6 +581,89 @@ expect_rc 0 "still merges, exit 0"
 expect_out "delete_branch_on_merge DISABLED" "warns the branch will survive"
 refute_out "deletes merged branches itself" "does not promise cleanup it cannot do"
 rm -f "$FAKE_DIR/queue_repo" "$FAKE_DIR/dbom_off"
+
+# ── wrapper: the base branch is read, never guessed (MG-1) ────────────────
+# An unknown base must refuse with no merge and no stale-base compare against a
+# guessed branch. The three unknown shapes are kept distinct: the lookup errors,
+# the PR reports an empty base, the PR reports a null base.
+
+new_case b1-approved-base-lookup-fails-closed
+seed_approved
+: >"$FAKE_DIR/base.fail"
+run_approved 70 --repo Fake/Repo --yes
+expect_rc 6 "base lookup API failure refuses, exit 6"
+expect_err "Could not read the base branch of PR #70" "API failure is named as such"
+expect_err "refusing to guess one" "says it will not guess a base"
+refute_merged "nothing merged when the base lookup fails"
+grep -qF -- "compare/master" "$FAKE_DIR/gh.calls" \
+  && bad "no compare against a guessed master" \
+  || ok "no compare against a guessed master"
+
+new_case b2-approved-base-empty-fails-closed
+seed_approved
+: >"$FAKE_DIR/base.value"
+run_approved 71 --repo Fake/Repo --yes
+expect_rc 6 "empty baseRefName refuses, exit 6"
+expect_err "reports no base branch" "a missing base is distinguished from an API failure"
+refute_merged "nothing merged on an empty base"
+
+new_case b3-approved-base-null-fails-closed
+seed_approved
+echo null >"$FAKE_DIR/base.value"
+run_approved 72 --repo Fake/Repo --yes
+expect_rc 6 "null baseRefName refuses, exit 6"
+expect_err "reports no base branch" "a null base is reported as missing"
+refute_merged "nothing merged on a null base"
+
+new_case b4-approved-force-does-not-supply-a-base
+seed_approved
+: >"$FAKE_DIR/base.fail"
+run_approved 73 --repo Fake/Repo --force --yes
+expect_rc 6 "--force does not override an unknown base, exit 6"
+refute_merged "no forced merge on an unknown base"
+
+new_case b5-approved-non-master-base-uses-its-own-base
+seed_approved
+echo staging >"$FAKE_DIR/base.value"
+run_approved 74 --repo Fake/Repo --yes
+expect_rc 0 "a genuine non-master base still merges, exit 0"
+expect_merged "merge issued against a real base"
+expect_gh "api repos/Fake/Repo/compare/staging...aaaaaaaaaaaa" \
+  "stale-base gate compares against the PR's own base"
+grep -qF -- "compare/master" "$FAKE_DIR/gh.calls" \
+  && bad "master is never substituted for the real base" \
+  || ok "master is never substituted for the real base"
+
+# ── policy contract (MG-2) ────────────────────────────────────────────────
+# The public contract is tested on its own, with no gh involved: the script, the
+# machine-readable file and the README must agree on version and exit codes.
+
+new_case c1-policy-contract-agrees
+CONTRACT="$HERE/../policy/contract.v1.json"
+README="$HERE/../README.md"
+if jq -e . "$CONTRACT" >/dev/null 2>&1; then ok "contract file is valid JSON"; else bad "contract file is valid JSON"; fi
+cv="$(jq -r '.version' "$CONTRACT" 2>/dev/null)"
+sv="$(sed -n 's/^MERGE_POLICY_VERSION=\([0-9][0-9]*\)$/\1/p' "$APPROVED")"
+[[ -n "$sv" && "$cv" == "$sv" ]] && ok "script MERGE_POLICY_VERSION ($sv) matches the contract ($cv)" \
+  || bad "script MERGE_POLICY_VERSION ($sv) matches the contract ($cv)"
+grep -qF -- "policy contract v$cv" "$README" && ok "README names the contract version" \
+  || bad "README names the contract version"
+for code in 1 2 3 4 5 6; do
+  jq -e --arg c "$code" '.exit_codes[$c] != null' "$CONTRACT" >/dev/null 2>&1 \
+    && grep -qF -- "\`$code\`" "$README" \
+    && grep -qE -- "^#.*[ :,]$code (usage|CI|no CI|stale|gates)" "$APPROVED" \
+    && ok "exit code $code is in the contract, README and script header" \
+    || bad "exit code $code is in the contract, README and script header"
+done
+jq -e '[.gates[].refuses_with | tostring] - (.exit_codes | keys) == []' "$CONTRACT" >/dev/null 2>&1 \
+  && ok "every gate refuses with a documented exit code" \
+  || bad "every gate refuses with a documented exit code"
+jq -e '.base_branch.default == null and (.does_not_provide | length > 0)' "$CONTRACT" >/dev/null 2>&1 \
+  && ok "contract has no default base and lists what it does not provide" \
+  || bad "contract has no default base and lists what it does not provide"
+grep -qiE 'staging[- ]branch proofs or release promotion' "$README" \
+  && ok "README disclaims staging proofs and release promotion" \
+  || bad "README disclaims staging proofs and release promotion"
 
 # ── summary ───────────────────────────────────────────────────────────────
 echo

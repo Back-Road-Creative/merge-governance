@@ -27,7 +27,8 @@ and writes a log line before it acts — an override you can audit, not a bypass
 | `bin/pr-verdict.jq` | the single shared definition of "ready" that the dashboard and the queue both use |
 | `bin/merge-org.sh` | optional convenience: merge by PR number inside one fixed org |
 | `bin/install-merge-approved.sh` | installs the gate, refusing a source that is stale or truncated |
-| `tests/test-merge-batch.sh` | offline harness — 110 assertions over the batch tool and the gate's `--wait` mode, no network and no real `gh` |
+| `policy/contract.v1.json` | the machine-readable policy contract `merge-approved.sh` enforces |
+| `tests/test-merge-batch.sh` | offline harness — 139 assertions over the batch tool, the gate, and the policy contract, no network and no real `gh` |
 
 ## The five gates
 
@@ -58,7 +59,37 @@ earlier.
 
 Exit codes: `1` usage or abort, `2` CI red, `3` CI pending or `--wait` deadline
 expired, `4` no CI runs or checks, `5` stale base with overlap, `6` gates
-unevaluable. `--force` overrides any of them and writes a log line first.
+unevaluable — including a PR whose base branch cannot be read. `--force` overrides
+any gate except the base-branch lookup, and writes a log line first.
+
+## Policy contract
+
+`merge-approved.sh` enforces **policy contract v1** (`MERGE_POLICY_VERSION=1` in
+the script). The same contract is stated machine-readably in
+[`policy/contract.v1.json`](policy/contract.v1.json), and the test harness fails
+if the script, that file and the exit-code line above disagree.
+
+What v1 enforces, for one PR that a human names:
+
+- The PR's base branch is **read from the PR**, never defaulted. If the lookup
+  fails, or the PR reports an empty or null base, the gate exits `6` with a
+  read-only diagnostic and merges nothing. `--force` does not apply: it skips a
+  failed gate, it cannot supply the branch the gates are defined against.
+  `master`, `main`, `staging` or any other real base follows the same checks.
+- The five gates above, with the exit codes above.
+
+What v1 does **not** provide. This snapshot does not enforce any of these, and
+nothing here should be read as claiming it does:
+
+- branch protection or required status checks (a host feature; see the top of
+  this file);
+- an allowlist of permitted base branches;
+- staging-branch proofs or release promotion;
+- any private workspace's own merge policy or review authority. A workspace that
+  needs those controls has to supply them around this tool.
+
+A change to what a gate or exit code means bumps the version and adds a new
+`policy/contract.v<N>.json`; v1 is never edited to describe different behavior.
 
 ## `--wait`
 
@@ -202,7 +233,7 @@ Offline and hermetic: no network, no real `gh` or `git`, no `sudo`. Everything
 runs through the injection seams to fakes in a temp dir. Waiting is made fast
 rather than stubbed out — the poll interval drops to 0.2s and the budget to a
 couple of seconds, so the real loop runs, including a scripted force-push
-mid-wait. 110 assertions across 29 cases.
+mid-wait. 139 assertions across 35 cases.
 
 ## Licence
 
